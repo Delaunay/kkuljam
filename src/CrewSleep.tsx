@@ -7,6 +7,7 @@ import {
   PlaneTakeoff, PlaneLanding, ShieldCheck, ShieldAlert, Pencil, Armchair, Pill,
 } from 'lucide-react';
 import VegaPlot from './components/VegaPlot';
+import InstallApp from './components/InstallApp';
 import { VegaProvider } from './contexts/VegaContext';
 import { useColorModeValue } from './components/color-mode';
 import {
@@ -601,7 +602,7 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `crew-sleep-${label}-${utcToWall(Date.now(), homeTz).slice(0, 10)}.json`;
+    a.download = `kkuljam-${label}-${utcToWall(Date.now(), homeTz).slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -615,7 +616,7 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
       update(() => normalizeProfile(profile));
       if (!urlProfile && data.name) setName(data.name);
     } catch {
-      window.alert(`${file.name} is not a Crew Sleep file.`);
+      window.alert(`${file.name} is not a Kkuljam backup file.`);
     }
   };
 
@@ -987,8 +988,10 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
 
       {/* Header */}
       <Flex justify="space-between" align="center" gap={2} flexWrap="wrap">
-        <Box>
-          <Heading size="lg" color="var(--heading-color)">Crew Sleep</Heading>
+        <HStack gap={3}>
+          <img src={`${import.meta.env.BASE_URL}icon-192.png`} alt="" width={40} height={40} style={{ borderRadius: 10, flexShrink: 0 }} />
+          <Box>
+          <Heading size="lg" color="var(--heading-color)">Kkuljam <Text as="span" fontSize="md" fontWeight="normal" color="var(--muted-text)">꿀잠</Text></Heading>
           <Text fontSize="xs" color={status === 'error' || status === 'missing' ? colors.warn : 'var(--muted-text)'}>
             {urlProfile ? `${urlProfile} · ` : ''}
             {status === 'saved' ? 'saved in this browser'
@@ -996,7 +999,8 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
               : status === 'error' ? 'could not save: browser storage is full or blocked'
               : 'stay on home time wherever you fly'}
           </Text>
-        </Box>
+          </Box>
+        </HStack>
         <HStack gap={2} flexWrap="wrap">
           <Button size="sm" colorPalette="blue" onClick={() => setParams({ add: adding ? null : '1', tab: null })}><Plus size={14} /> Add trip</Button>
           {p.pendingStart ? (
@@ -1004,6 +1008,7 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
           ) : (
             <Button size="sm" variant="outline" onClick={() => set('pendingStart', Date.now())}><BedDouble size={14} /> Going to sleep</Button>
           )}
+          <InstallApp />
           <Button size="sm" variant="ghost" aria-label="Configuration" onClick={() => setParams({ config: '1' })}><Settings size={16} /></Button>
         </HStack>
       </Flex>
@@ -1420,9 +1425,9 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
                       1h30 is the minimum, 3h is good, more is better. Shown in green on the timeline.
                     </Text>
                     <Text fontSize="2xs" color="var(--muted-text)" mt={1}>
-                      Melatonin: reminder on layovers only, before sleep in your home night (when it is often daytime locally), never
-                      before a sleep that ends for a duty. Only if your doctor allows it: it is prescription-only in some countries,
-                      including Korea, and many airlines restrict sleep aids before duty.
+                      Melatonin: reminder on layovers only, before sleep in your home night (when it is often daytime locally), and
+                      at least 8 h before the next sign-on. Only if your doctor allows it: it is prescription-only in some countries,
+                      including Korea, and many airlines restrict sleep aids before duty. Untick to hide the reminders.
                     </Text>
                     <Text fontSize="2xs" color="var(--muted-text)" mt={1}>
                       When the next night is short (overnight flight, early report), the night before is extended by up to this

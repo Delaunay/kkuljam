@@ -1,4 +1,4 @@
-// Draws the Crew Sleep app icon (crescent moon and stars on a night sky) and
+// Draws the Kkuljam app icon (crescent moon and stars on a night sky) and
 // writes the PNG sizes the PWA needs. Pure Node, no image library:
 //   node scripts/crew-icons.mjs
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -88,4 +88,4 @@ writeFileSync(new URL('icon-192.png', OUT), draw(192));
 writeFileSync(new URL('icon-512.png', OUT), draw(512));
 writeFileSync(new URL('icon-maskable-512.png', OUT), draw(512, 0.1));
 writeFileSync(new URL('favicon.png', OUT), draw(64));
-console.log('Crew Sleep icons written to', OUT.pathname);
+console.log('Kkuljam icons written to', OUT.pathname);

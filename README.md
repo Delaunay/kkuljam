@@ -1,6 +1,6 @@
-# Crew Sleep (kkuljam)
+# Kkuljam (꿀잠)
 
-A sleep planner for cabin crew, installable on a phone as an app (PWA). It plans
+Kkuljam (꿀잠, "sweet sleep") is a sleep planner for cabin crew, installable on a phone as an app (PWA). It plans
 sleep around a rotation so you stay on home time across time zones: when to
 sleep on a layover, which bunk break to take, naps, light and caffeine, and the
 legal rest between duties. The defaults are set up for Trinity Airways out of

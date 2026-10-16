@@ -2,7 +2,7 @@
   "name": "kkuljam",
   "private": true,
   "version": "0.1.0",
-  "description": "Crew Sleep: a sleep planner PWA for cabin crew that keeps you on home time across time zones.",
+  "description": "Kkuljam (꿀잠): a sleep planner PWA for cabin crew that keeps you on home time across time zones.",
   "type": "module",
   "scripts": {
     "dev": "vite",

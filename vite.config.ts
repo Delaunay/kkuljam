@@ -13,9 +13,9 @@ export default defineConfig({
       injectRegister: 'auto',
       includeAssets: ['apple-touch-icon.png', 'favicon.png'],
       manifest: {
-        name: 'Crew Sleep',
-        short_name: 'Crew Sleep',
-        description: 'Sleep planner for cabin crew: stay on home time across time zones.',
+        name: 'Kkuljam',
+        short_name: 'Kkuljam',
+        description: 'Kkuljam (꿀잠, sweet sleep): sleep planner for cabin crew that keeps you on home time across time zones.',
         start_url: './',
         scope: './',
         display: 'standalone',

@@ -157,6 +157,9 @@ export const SLEEP_KINDS: PlanKind[] = ['sleep', 'anchor', 'nap', 'inflight', 's
 // 30 min power nap, then whole 90 min sleep cycles, plus a full and a long night.
 export const DEFAULT_NAP_OPTIONS = [30, 90, 180, 360, 480, 540];
 
+// Minimum time between taking melatonin and the next sign-on.
+export const MELATONIN_CLEAR = 8 * HOUR;
+
 // After a late arrival, sleep may run this far past home wake time to stay in one block.
 export const SLEEP_IN_MAX = 4 * HOUR;
 
@@ -377,7 +380,7 @@ export const newProfile = (): Profile => ({
   sleepBankMin: 90,
   strategicNap: true,
   strategicNapMin: 30,
-  melatonin: false,
+  melatonin: true,
   melatoninLeadMin: 30,
   anchorCoreMin: 180,
   reportMin: 90,
@@ -794,13 +797,14 @@ export function planGround(
   });
 
   // Melatonin: only on layovers, only before sleep in the home night (where it keeps
-  // the home clock instead of shifting it), and never before a sleep that ends for a duty.
+  // the home clock instead of shifting it), and at least MELATONIN_CLEAR before the
+  // next sign-on so it has worn off by duty.
   if (p.melatonin && !g.isHome) {
     for (const it of kept.filter(i => i.kind === 'sleep' || i.kind === 'anchor')) {
-      if (g.outbound && it.end >= window.end - 30 * MIN) continue;
       // Taken late in the home night or in the home morning it would delay the clock instead.
       if (!nights.some(n => it.start >= n.start - 2 * HOUR && it.start <= n.end - 4 * HOUR)) continue;
       const t = it.start - p.melatoninLeadMin * MIN;
+      if (g.outbound && g.outbound.start - p.reportMin * MIN - t < MELATONIN_CLEAR) continue;
       kept.push({ start: t, end: t, kind: 'melatonin' });
     }
   }
