@@ -26,22 +26,26 @@ npm run icons      # redraw the app icons into public/
 | `src/crewSleepLogic.ts` | Time zones and the planning rules (no React) |
 | `src/crewSleepNetwork.ts` | Airports, routes, block times and flight numbers |
 | `vite.config.ts` | Build, app manifest and offline cache |
-| `public/_headers` | Cache rules for Cloudflare Pages |
+| `public/_headers` | Cache rules on Cloudflare |
+| `wrangler.jsonc` | Cloudflare deploy: serve `dist/` as static files |
 
-## Deploy on Cloudflare Pages
+## Deploy on Cloudflare
 
-Workers & Pages → Create → Pages → connect this repository, then:
+Workers & Pages → Create → import this repository, then:
 
 | Setting | Value |
 |---|---|
-| Framework preset | None (or Vite) |
+| Project name | `kkuljam` (must match `name` in `wrangler.jsonc`) |
 | Build command | `npm run build` |
-| Build output directory | `dist` |
+| Deploy command | `npx wrangler deploy` |
 | Environment variable | `NODE_VERSION` = `20` |
 
-Every push to `main` deploys; other branches get preview URLs. The app is
-served from the root of its domain. To serve it under a sub-path instead (e.g.
-GitHub Pages at `/kkuljam/`), build with `BASE_PATH=/kkuljam/ npm run build`.
+`wrangler.jsonc` serves `dist/` as static files; `public/_headers` sets the
+cache rules. Every push to `main` deploys. Check a build locally with
+`npm run build && npx wrangler deploy --dry-run`.
+
+To serve the app under a sub-path instead (e.g. GitHub Pages at `/kkuljam/`),
+build with `BASE_PATH=/kkuljam/ npm run build`.
 
 ## Install on an iPhone
 
