@@ -10,6 +10,10 @@ Everything is stored in the browser (localStorage). There is no server and no
 account; use **Download** / **Import** in the configuration to back up a
 profile or move it to another device.
 
+A trip's plan can be added to the phone calendar (Apple Calendar or any app that
+opens `.ics` files) with reminders: **Calendar** above "Your plan, step by step"
+lets you pick sleep, naps, bunk rest, the coffee cut-off, and so on.
+
 ## Develop
 
 ```sh

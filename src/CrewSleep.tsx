@@ -4,11 +4,12 @@ import { Box, Flex, Heading, Text, VStack, HStack, Input, Button, Dialog, Portal
 import {
   Save, Trash2, FolderOpen, Plus, Moon, Sun, Coffee, Plane, BedDouble, AlarmClock, Clock,
   ChevronDown, ChevronRight, Glasses, Sparkles, MapPin, X, Download, Upload, Settings,
-  PlaneTakeoff, PlaneLanding, ShieldCheck, ShieldAlert, Pencil, Armchair, Pill,
+  PlaneTakeoff, PlaneLanding, ShieldCheck, ShieldAlert, Pencil, Armchair, Pill, CalendarPlus,
 } from 'lucide-react';
 import VegaPlot from './components/VegaPlot';
 import InstallApp from './components/InstallApp';
 import { VegaProvider } from './contexts/VegaContext';
+import { CALENDAR_GROUPS, buildIcs, openIcs, readCalendarPrefs, writeCalendarPrefs } from './calendarExport';
 import { useColorModeValue } from './components/color-mode';
 import {
   Airport, Route, RestBreak, Flight, SleepEntry, Profile, Iv, Night, ParsedFlight, ParsedSleep, Ground,
@@ -352,6 +353,9 @@ function draftFor(p: Profile, dest: string, date: string, tzOf: (c: string) => s
   };
 }
 
+/** Lower case without accents, for matching typed text: "São Paulo" -> "sao paulo". */
+const fold = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
 const AddTrip: React.FC<{
   p: Profile;
   homeTz: string;
@@ -367,19 +371,32 @@ const AddTrip: React.FC<{
   const bases = baseCodes(p.homeBase);
   const known = new Set(p.airports.map(a => a.code.toUpperCase()));
 
-  // Known destinations matching what is typed (code or city); ones with a known route first.
-  const q = destText.trim().toLowerCase();
-  const suggestions = p.airports
-    .filter(a => !bases.includes(a.code.toUpperCase()))
-    .filter(a => !q || a.code.toLowerCase().startsWith(q) || (a.city || '').toLowerCase().includes(q) || `${a.code} ${a.city || ''}`.toLowerCase().startsWith(q))
-    .map(a => ({ a, routed: bases.some(b => routeFor(p.routes, b, a.code).blockMin) }))
-    .sort((x, y) => Number(y.routed) - Number(x.routed) || x.a.code.localeCompare(y.a.code))
-    .slice(0, 8);
+  // Known destinations matching what is typed: airport code or any word of the city ("tok", "narita",
+  // "sao paulo"), ignoring case and accents. Exact code first, then destinations with a known route.
+  const matchDest = (text: string) => {
+    const words = fold(text).split(/[\s,]+/).filter(Boolean);
+    return p.airports
+      .filter(a => !bases.includes(a.code.toUpperCase()))
+      .map(a => {
+        const code = a.code.toLowerCase();
+        const hay = fold(`${a.code} ${a.city || ''}`);
+        const parts = hay.split(/[\s,/()-]+/);
+        const hit = words.every(w => parts.some(x => x.startsWith(w)) || hay.includes(w));
+        return { a, hit, exact: words.length === 1 && words[0] === code, routed: bases.some(b => routeFor(p.routes, b, a.code).blockMin) };
+      })
+      .filter(m => m.hit)
+      .sort((x, y) => Number(y.exact) - Number(x.exact) || Number(y.routed) - Number(x.routed) || x.a.code.localeCompare(y.a.code));
+  };
+  const suggestions = matchDest(destText).slice(0, 8);
 
   const pickDest = (text: string) => {
     setDestText(text);
-    const code = text.trim().toUpperCase().slice(0, 3);
-    if (code.length === 3 && known.has(code) && !bases.includes(code)) setD(draftFor(p, code, d?.date || today, tzOf));
+    // A code ("SYD", or a picked "SYD Sydney"), else the only airport the text matches ("Paris", "Narita").
+    const code = text.trim().toUpperCase().split(/\s+/)[0] ?? '';
+    const found = matchDest(text);
+    const dest = known.has(code) && !bases.includes(code) ? code
+      : fold(text).length >= 3 && found.length === 1 ? found[0].a.code.toUpperCase() : '';
+    if (dest) setD(prev => (prev?.dest === dest ? prev : draftFor(p, dest, prev?.date || today, tzOf)));
     else setD(null);
   };
   const patch = (x: Partial<TripDraft>) => setD(prev => (prev ? { ...prev, ...x } : prev));
@@ -523,6 +540,10 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
   const [netFilter, setNetFilter] = useState('');
   const [newRoute, setNewRoute] = useState<Route>({ from: '', to: '', blockMin: 0 });
   const [now, setNow] = useState(Date.now());
+  const [calOpen, setCalOpen] = useState(false);
+  const [calGroups, setCalGroups] = useState<Set<string>>(() => new Set(readCalendarPrefs().groups));
+  const [calAlarm, setCalAlarm] = useState<number | null>(() => readCalendarPrefs().alarmMin);
+  useEffect(() => writeCalendarPrefs({ groups: Array.from(calGroups), alarmMin: calAlarm }), [calGroups, calAlarm]);
   const dirty = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -983,6 +1004,22 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
     return `anchor core ${fmtDur(m)} · ${grade}`;
   };
 
+  // Calendar export: what is still ahead in this trip, by the groups ticked in the dialog.
+  const calUpcoming = events.filter(e => e.end >= now);
+  const calCount = (kinds: EventKind[]) => calUpcoming.filter(e => kinds.includes(e.kind)).length;
+  const calKinds = CALENDAR_GROUPS.filter(g => calGroups.has(g.key)).flatMap(g => g.kinds);
+  const calPicked = calUpcoming.filter(e => calKinds.includes(e.kind));
+  const exportCalendar = () => {
+    if (!trip || !calPicked.length) return;
+    const ics = buildIcs(calPicked.map(e => ({
+      kind: e.kind, start: e.start, end: e.end, title: eventTitle(e),
+      detail: [eventDetail(e), coreLine(e)].filter(Boolean).join(' · '),
+      place: e.place === 'in flight' ? 'In flight' : [e.place, cityOf(e.place)].filter(Boolean).join(' '),
+    })), calAlarm, `Kkuljam ${tripTitle(trip)}`);
+    openIcs(ics, `kkuljam-${tripTitle(trip).replace(/\W+/g, '-')}-${utcToWall(trip.start, homeTz).slice(0, 10)}.ics`);
+    setCalOpen(false);
+  };
+
   const tipFiltered = events.filter(e => showTips || !e.tip);
   // Keep the plan to what matters now: the last step that happened, then what is on and ahead.
   // A trip that is entirely over (or not started) shows everything.
@@ -1214,9 +1251,12 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
           {/* Step by step */}
           <Flex justify="space-between" align="center" mt={5} mb={2}>
             <Text fontSize="sm" fontWeight="bold">Your plan, step by step</Text>
-            <HStack as="label" gap={2} fontSize="xs" cursor="pointer">
-              <input type="checkbox" checked={showTips} onChange={e => setParams({ tips: e.target.checked ? null : '0' })} />
-              <span>Light & caffeine tips</span>
+            <HStack gap={3}>
+              <HStack as="label" gap={2} fontSize="xs" cursor="pointer">
+                <input type="checkbox" checked={showTips} onChange={e => setParams({ tips: e.target.checked ? null : '0' })} />
+                <span>Light & caffeine tips</span>
+              </HStack>
+              <Button size="xs" variant="outline" onClick={() => setCalOpen(true)}><CalendarPlus size={12} /> Calendar</Button>
             </HStack>
           </Flex>
           {hiddenCount > 0 && (
@@ -1359,6 +1399,70 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
         )}
       </Card>
       </>)}
+
+      {/* Export the trip plan to the phone calendar */}
+      <Dialog.Root open={calOpen} onOpenChange={(d: { open: boolean }) => setCalOpen(d.open)} placement="center" scrollBehavior="inside">
+        <Portal>
+          <Dialog.Backdrop />
+          <Dialog.Positioner>
+            <Dialog.Content maxW="440px" width="95vw" maxH="90vh">
+              <Dialog.Header>
+                <Dialog.Title><HStack gap={2}><CalendarPlus size={18} /><span>Add to calendar</span></HStack></Dialog.Title>
+              </Dialog.Header>
+              <Dialog.CloseTrigger asChild>
+                <CloseButton size="sm" />
+              </Dialog.CloseTrigger>
+              <Dialog.Body>
+                <VStack align="stretch" gap={4}>
+                  <Text fontSize="sm" color="var(--muted-text)">
+                    The steps still ahead in {trip ? tripTitle(trip) : 'this trip'} become calendar events with a reminder.
+                  </Text>
+                  <Box>
+                    <Text fontSize="xs" fontWeight="bold" mb={2}>What to add</Text>
+                    <VStack align="stretch" gap={2}>
+                      {CALENDAR_GROUPS.map(g => {
+                        const n = calCount(g.kinds);
+                        return (
+                          <HStack key={g.key} as="label" gap={2} fontSize="sm" cursor={n ? 'pointer' : 'default'} opacity={n ? 1 : 0.5}>
+                            <input type="checkbox" disabled={!n} checked={!!n && calGroups.has(g.key)}
+                              onChange={e => setCalGroups(prev => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(g.key); else next.delete(g.key);
+                                return next;
+                              })} />
+                            <span style={{ flex: 1 }}>{g.label}</span>
+                            <Text as="span" fontSize="xs" color="var(--muted-text)">{n}</Text>
+                          </HStack>
+                        );
+                      })}
+                    </VStack>
+                  </Box>
+                  <Labeled label="Reminder">
+                    <select value={calAlarm ?? ''} onChange={e => setCalAlarm(e.target.value === '' ? null : Number(e.target.value))}
+                      style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: 'inherit' }}>
+                      <option value="">No reminder</option>
+                      <option value="0">When it starts</option>
+                      <option value="15">15 min before</option>
+                      <option value="30">30 min before</option>
+                      <option value="60">1 h before</option>
+                    </select>
+                  </Labeled>
+                  <Text fontSize="2xs" color="var(--muted-text)">
+                    On iPhone, tap "Add All" on the screen that opens. If the plan changes, delete the old events before adding
+                    the trip again.
+                  </Text>
+                  <HStack>
+                    <Button colorPalette="blue" disabled={!calPicked.length} onClick={exportCalendar}>
+                      <CalendarPlus size={14} /> Add {calPicked.length} event{calPicked.length === 1 ? '' : 's'}
+                    </Button>
+                    <Button variant="ghost" onClick={() => setCalOpen(false)}>Cancel</Button>
+                  </HStack>
+                </VStack>
+              </Dialog.Body>
+            </Dialog.Content>
+          </Dialog.Positioner>
+        </Portal>
+      </Dialog.Root>
 
       {/* Configuration */}
       <Dialog.Root open={configOpen} onOpenChange={(d: { open: boolean }) => { if (!d.open) setParams({ config: null }); }} placement="center" scrollBehavior="inside">

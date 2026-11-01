@@ -48,6 +48,8 @@ they are stored can silently wipe everyone's data, so:
 - Keys: `crew-sleep:profiles` (saved profiles by name) and `crew-sleep:draft`
   (the unsaved one). See the end of `src/crewSleepLogic.ts`. The key prefix
   stays `crew-sleep` even though the app is now called Kkuljam.
+- `crew-sleep:calendar` only remembers the calendar export choices; losing it
+  is harmless.
 - Do not rename keys or change the shape of a profile without code that reads
   the old form and converts it (`normalizeProfile` fills in missing fields:
   add new fields there with a default).
