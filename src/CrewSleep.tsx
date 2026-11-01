@@ -363,8 +363,18 @@ const AddTrip: React.FC<{
   const today = utcToWall(Date.now(), homeTz).slice(0, 10);
   const [destText, setDestText] = useState('');
   const [d, setD] = useState<TripDraft | null>(null);
+  const [suggestOpen, setSuggestOpen] = useState(false);
   const bases = baseCodes(p.homeBase);
   const known = new Set(p.airports.map(a => a.code.toUpperCase()));
+
+  // Known destinations matching what is typed (code or city); ones with a known route first.
+  const q = destText.trim().toLowerCase();
+  const suggestions = p.airports
+    .filter(a => !bases.includes(a.code.toUpperCase()))
+    .filter(a => !q || a.code.toLowerCase().startsWith(q) || (a.city || '').toLowerCase().includes(q) || `${a.code} ${a.city || ''}`.toLowerCase().startsWith(q))
+    .map(a => ({ a, routed: bases.some(b => routeFor(p.routes, b, a.code).blockMin) }))
+    .sort((x, y) => Number(y.routed) - Number(x.routed) || x.a.code.localeCompare(y.a.code))
+    .slice(0, 8);
 
   const pickDest = (text: string) => {
     setDestText(text);
@@ -401,11 +411,31 @@ const AddTrip: React.FC<{
   return (
     <Card title={<HStack gap={2}><PlaneTakeoff size={16} /><span>New trip</span></HStack>}>
       <Flex gap={3} flexWrap="wrap" align="flex-end">
-        <Box flex="1 1 220px">
+        <Box flex="1 1 220px" position="relative">
           <Labeled label="Where are you flying?">
-            <Input size="md" list="crew-sleep-dest" placeholder="SYD, Paris, Tokyo…" value={destText} autoFocus
-              onChange={e => pickDest(e.target.value)} />
+            <Input size="md" placeholder="SYD, Paris, Tokyo…" value={destText} autoFocus autoComplete="off"
+              onFocus={() => setSuggestOpen(true)} onBlur={() => setSuggestOpen(false)}
+              onChange={e => { pickDest(e.target.value); setSuggestOpen(true); }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !d && suggestions[0]) { pickDest(`${suggestions[0].a.code} ${suggestions[0].a.city || ''}`.trim()); setSuggestOpen(false); }
+                if (e.key === 'Escape') setSuggestOpen(false);
+              }} />
           </Labeled>
+          {suggestOpen && !d && suggestions.length > 0 && (
+            <Box position="absolute" left={0} right={0} top="100%" mt={1} zIndex={10} maxH="280px" overflowY="auto"
+              bg="var(--card-bg-raised)" border="1px solid" borderColor="var(--border-color)" borderRadius="md" boxShadow="md">
+              {suggestions.map(({ a, routed }) => (
+                <Box key={a.code} as="button" display="flex" w="100%" textAlign="left" gap={2} px={3} py={2} fontSize="sm"
+                  _hover={{ bg: 'var(--border-color)' }}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => { pickDest(`${a.code} ${a.city || ''}`.trim()); setSuggestOpen(false); }}>
+                  <Text as="span" fontWeight="bold">{a.code}</Text>
+                  <Text as="span" flex="1">{a.city}</Text>
+                  {!routed && <Text as="span" fontSize="xs" color="var(--muted-text)">no route yet</Text>}
+                </Box>
+              ))}
+            </Box>
+          )}
         </Box>
         <Box>
           <Labeled label="Departure date">
@@ -414,9 +444,6 @@ const AddTrip: React.FC<{
           </Labeled>
         </Box>
       </Flex>
-      <datalist id="crew-sleep-dest">
-        {p.airports.filter(a => !bases.includes(a.code)).map(a => <option key={a.code} value={`${a.code} ${a.city || ''}`.trim()} />)}
-      </datalist>
 
       {d && (
         <VStack align="stretch" gap={3} mt={4}>
