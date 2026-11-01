@@ -8,14 +8,14 @@ export interface NetworkAirport {
   code: string;
   city: string;
   tz: string;
-  toBedMin?: number;
-  fromBedMin?: number;
+  toBedMin?: number;   // block-in -> at the hotel (or home): deplane and commute
+  fromBedMin?: number; // leaving the hotel (or home) -> departure: commute and report
 }
 
 export const TRINITY_AIRPORTS: NetworkAirport[] = [
   // Bases (home): long commute from Incheon, report ~1h40 before departure.
-  { code: 'ICN', city: 'Seoul Incheon', tz: 'Asia/Seoul', toBedMin: 120, fromBedMin: 210 },
-  { code: 'GMP', city: 'Seoul Gimpo', tz: 'Asia/Seoul', toBedMin: 90, fromBedMin: 160 },
+  { code: 'ICN', city: 'Seoul Incheon', tz: 'Asia/Seoul', toBedMin: 90, fromBedMin: 180 },
+  { code: 'GMP', city: 'Seoul Gimpo', tz: 'Asia/Seoul', toBedMin: 60, fromBedMin: 130 },
   // South Korea
   { code: 'PUS', city: 'Busan Gimhae', tz: 'Asia/Seoul' },
   { code: 'CJJ', city: 'Cheongju', tz: 'Asia/Seoul' },
@@ -23,8 +23,8 @@ export const TRINITY_AIRPORTS: NetworkAirport[] = [
   { code: 'KWJ', city: 'Gwangju', tz: 'Asia/Seoul' },
   { code: 'CJU', city: 'Jeju', tz: 'Asia/Seoul' },
   // Japan
-  { code: 'NRT', city: 'Tokyo Narita', tz: 'Asia/Tokyo', toBedMin: 120, fromBedMin: 180 },
-  { code: 'KIX', city: 'Osaka Kansai', tz: 'Asia/Tokyo', toBedMin: 105 },
+  { code: 'NRT', city: 'Tokyo Narita', tz: 'Asia/Tokyo', toBedMin: 90, fromBedMin: 150 },
+  { code: 'KIX', city: 'Osaka Kansai', tz: 'Asia/Tokyo', toBedMin: 75 },
   { code: 'UKB', city: 'Kobe', tz: 'Asia/Tokyo' },
   { code: 'NGO', city: 'Nagoya Chubu', tz: 'Asia/Tokyo' },
   { code: 'FUK', city: 'Fukuoka', tz: 'Asia/Tokyo' },
@@ -49,11 +49,11 @@ export const TRINITY_AIRPORTS: NetworkAirport[] = [
   { code: 'KHH', city: 'Kaohsiung', tz: 'Asia/Taipei' },
   { code: 'RMQ', city: 'Taichung', tz: 'Asia/Taipei' },
   // Southeast Asia
-  { code: 'BKK', city: 'Bangkok Suvarnabhumi', tz: 'Asia/Bangkok', toBedMin: 120 },
+  { code: 'BKK', city: 'Bangkok Suvarnabhumi', tz: 'Asia/Bangkok', toBedMin: 90 },
   { code: 'CNX', city: 'Chiang Mai', tz: 'Asia/Bangkok' },
   { code: 'SIN', city: 'Singapore Changi', tz: 'Asia/Singapore' },
   { code: 'DPS', city: 'Denpasar Bali', tz: 'Asia/Makassar' },
-  { code: 'CGK', city: 'Jakarta Soekarno–Hatta', tz: 'Asia/Jakarta', toBedMin: 120, fromBedMin: 180 },
+  { code: 'CGK', city: 'Jakarta Soekarno–Hatta', tz: 'Asia/Jakarta', toBedMin: 90, fromBedMin: 150 },
   { code: 'BKI', city: 'Kota Kinabalu', tz: 'Asia/Kuching' },
   { code: 'CEB', city: 'Cebu Mactan', tz: 'Asia/Manila' },
   { code: 'KLO', city: 'Kalibo', tz: 'Asia/Manila' },
@@ -72,7 +72,7 @@ export const TRINITY_AIRPORTS: NetworkAirport[] = [
   { code: 'SYD', city: 'Sydney', tz: 'Australia/Sydney' },
   { code: 'YVR', city: 'Vancouver', tz: 'America/Vancouver' },
   // Europe
-  { code: 'CDG', city: 'Paris Charles de Gaulle', tz: 'Europe/Paris', toBedMin: 105 },
+  { code: 'CDG', city: 'Paris Charles de Gaulle', tz: 'Europe/Paris', toBedMin: 75 },
   { code: 'FRA', city: 'Frankfurt', tz: 'Europe/Berlin' },
   { code: 'FCO', city: 'Rome Fiumicino', tz: 'Europe/Rome' },
   { code: 'BCN', city: 'Barcelona', tz: 'Europe/Madrid' },

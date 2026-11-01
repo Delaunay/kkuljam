@@ -25,7 +25,7 @@ export const CALENDAR_GROUPS: { key: string; label: string; kinds: EventKind[]; 
   { key: 'caffeine', label: 'Coffee cut-off', kinds: ['caffeine'], on: true },
   { key: 'light', label: 'Bright light & dim lights', kinds: ['light', 'dim'], on: false },
   { key: 'melatonin', label: 'Melatonin', kinds: ['melatonin'], on: false },
-  { key: 'ready', label: 'Start getting ready & in bed', kinds: ['wakeup', 'inbed'], on: true },
+  { key: 'ready', label: 'Getting ready & commute', kinds: ['wakeup', 'inbed'], on: true },
   { key: 'flights', label: 'Flights (departure & arrival)', kinds: ['depart', 'arrive'], on: false },
 ];
 

@@ -21,10 +21,15 @@ function manifestOnlineOnly(): Plugin {
   };
 }
 
+// 'production' only for the live site (Cloudflare builds of main); previews
+// and local builds are 'preview': test ads, debug analytics.
+const DEPLOY = (process.env.WORKERS_CI_BRANCH || process.env.CF_PAGES_BRANCH) === 'main' ? 'production' : 'preview';
+
 // BASE_PATH: URL prefix the app is served under ('/' on Cloudflare Pages,
 // '/<repo>/' on GitHub Pages).
 export default defineConfig({
   base: process.env.BASE_PATH || '/',
+  define: { __DEPLOY__: JSON.stringify(DEPLOY) },
   plugins: [
     react(),
     VitePWA({

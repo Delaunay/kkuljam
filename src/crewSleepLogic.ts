@@ -19,8 +19,8 @@ export interface Airport {
   code: string;
   city?: string;
   tz: string;
-  toBedMin: number;    // block-in -> in bed: deplane, commute, shower, prepare
-  fromBedMin: number;  // out of bed -> departure: prepare, commute, report
+  toBedMin: number;    // block-in -> at the hotel (or home): deplane, commute (wind down comes after)
+  fromBedMin: number;  // leaving the hotel (or home) -> departure: commute, report (preparing comes before)
 }
 
 /** One direction of a route; departTime and flightNo are learned from the flights she enters. */
@@ -67,6 +67,8 @@ export interface Profile {
   maxBunkRestMin: number;  // longest sleep cabin duties allow on board
   serviceAfterTakeoffMin: number;  // meal service after takeoff: no rest
   serviceBeforeLandingMin: number; // meal service before landing: no rest
+  windDownMin: number;     // after the commute: shower and get ready for bed, the same everywhere
+  prepareMin: number;      // out of bed -> leaving for the airport: shower, dress, pack, the same everywhere
   sleepBankMin: number;    // extra sleep the night before a short night
   strategicNap: boolean;   // short nap in the crew lounge before a night flight or long duty
   strategicNapMin: number;
@@ -84,7 +86,11 @@ export interface Profile {
   flights: Flight[];
   sleeps: SleepEntry[];
   pendingStart: number | null; // UTC ms of "going to sleep" tap
+  planEdits: PlanEdit[];   // suggested times the user moved to fit their day
 }
+
+/** A suggested plan item moved by the user, found again by its kind and suggested start. */
+export interface PlanEdit { kind: PlanKind; planned: number; start: number; end: number }
 
 export interface Iv { start: number; end: number }
 export interface Night extends Iv { date: string }
@@ -107,6 +113,7 @@ export interface PlanItem extends Iv {
   kind: PlanKind;
   bankedMin?: number; // extra sleep added because the next night is short
   recovery?: boolean; // catch-up sleep right after a missed night
+  planned?: Iv;       // the suggested time, when the user moved it
 }
 
 export interface GroundPlan {
@@ -339,8 +346,8 @@ export const newAirport = (code: string, fallbackTz: string): Airport => {
     code,
     city: net?.city,
     tz: KNOWN_AIRPORTS[code] || fallbackTz,
-    toBedMin: net?.toBedMin ?? 90,
-    fromBedMin: net?.fromBedMin ?? 150,
+    toBedMin: net?.toBedMin ?? 60,
+    fromBedMin: net?.fromBedMin ?? 120,
   };
 };
 
@@ -366,6 +373,10 @@ export function mergeNetwork(p: Profile): Profile {
   };
 }
 
+// Profiles saved before these were split out had them inside each airport's toBedMin / fromBedMin.
+const WIND_DOWN_MIN = 30;
+const PREPARE_MIN = 30;
+
 export const newProfile = (): Profile => ({
   homeTz: 'Asia/Seoul',
   homeBase: 'ICN GMP',
@@ -377,6 +388,8 @@ export const newProfile = (): Profile => ({
   maxBunkRestMin: 180,
   serviceAfterTakeoffMin: 60,
   serviceBeforeLandingMin: 60,
+  windDownMin: WIND_DOWN_MIN,
+  prepareMin: PREPARE_MIN,
   sleepBankMin: 90,
   strategicNap: true,
   strategicNapMin: 30,
@@ -393,13 +406,25 @@ export const newProfile = (): Profile => ({
   flights: [],
   sleeps: [],
   pendingStart: null,
+  planEdits: [],
 });
 
 /** Fill in fields added since a profile was saved; an empty network gets the Trinity defaults. */
 export function normalizeProfile(data: Partial<Profile>): Profile {
   const p: Profile = { ...newProfile(), ...data };
   if (!data.airports?.length) p.airports = networkAirports();
+  else {
+    // Older profile: move the wind down and the preparing out of each airport, keeping every total the same.
+    const oldTo = typeof data.windDownMin !== 'number';
+    const oldFrom = typeof data.prepareMin !== 'number';
+    p.airports = data.airports.map(a => ({
+      ...a,
+      toBedMin: oldTo ? Math.max(0, a.toBedMin - WIND_DOWN_MIN) : a.toBedMin,
+      fromBedMin: oldFrom ? Math.max(0, a.fromBedMin - PREPARE_MIN) : a.fromBedMin,
+    }));
+  }
   p.routes = data.routes?.length ? withNetworkFlightNos(data.routes) : networkRoutes();
+  if (!Array.isArray(p.planEdits)) p.planEdits = [];
   return p;
 }
 
@@ -653,8 +678,8 @@ export function planGround(
     })()
     : null;
   const window = {
-    start: g.start + (g.inbound ? g.airport.toBedMin * MIN : 0),
-    end: g.end - (g.outbound ? (g.departAirport ?? g.airport).fromBedMin * MIN : 0)
+    start: g.start + (g.inbound ? (g.airport.toBedMin + p.windDownMin) * MIN : 0),
+    end: g.end - (g.outbound ? ((g.departAirport ?? g.airport).fromBedMin + p.prepareMin) * MIN : 0)
       - (lounge ? p.strategicNapMin * MIN + LOUNGE_MARGIN : 0),
   };
   if (window.end <= window.start) {
@@ -838,6 +863,22 @@ export function restChecks(grounds: Ground[], p: Profile) {
   return out;
 }
 
+/**
+ * Put the user's own time on a suggested item. An edit only matches the suggestion
+ * it was made on: if the plan changes (new flight times, settings), the new suggestion shows.
+ */
+export function applyPlanEdit<T extends PlanItem>(item: T, edits: PlanEdit[]): T {
+  const e = edits.find(x => x.kind === item.kind && x.planned === item.start);
+  return e ? { ...item, start: e.start, end: e.end, planned: { start: item.start, end: item.end } } : item;
+}
+
+/** The UTC time showing `hhmm` on the clock of `tz` that is closest to `near`. */
+export function nearestWall(hhmm: string, tz: string, near: number): number {
+  const day = utcToWall(near, tz).slice(0, 10);
+  const candidates = [-1, 0, 1].map(d => wallToUtc(`${addDays(day, d)}T${hhmm}`, tz)).filter(t => !Number.isNaN(t));
+  return candidates.reduce((best, t) => (Math.abs(t - near) < Math.abs(best - near) ? t : best), candidates[0] ?? NaN);
+}
+
 // ---------------------------------------------------------------------------
 // Trip plan: one chronological list of what to do, in local time
 // ---------------------------------------------------------------------------
@@ -854,6 +895,7 @@ export interface PlanEvent extends Iv {
   tip?: boolean;       // light / caffeine guidance, can be hidden
   bankedMin?: number;  // extra sleep banked before a short night
   recovery?: boolean;  // catch-up sleep right after a missed night
+  planned?: Iv;        // the suggested time, when the user moved it
 }
 
 /** How far around a trip its plan reaches: the night before and the first recovery night. */
@@ -867,6 +909,7 @@ export function tripEvents(
   rests: Map<string, RestInfo>,
   homeTz: string,
   cityOf: (code: string) => string,
+  prepareMin = 0,
 ): PlanEvent[] {
   const range = { start: trip.start - TRIP_BEFORE, end: trip.end + TRIP_AFTER };
   const events: PlanEvent[] = [];
@@ -883,9 +926,10 @@ export function tripEvents(
     const toTz = toGround?.ground.tz ?? homeTz;
     if (fromGround?.window) {
       const lounge = fromGround.items.some(i => i.kind === 'strategic');
-      events.push({ start: fromGround.window.end, end: fromGround.window.end, kind: 'wakeup', tz: fromTz, place: from,
-        title: 'Start getting ready',
-        detail: `latest: preparation, commute${lounge ? ', lounge nap' : ''} and report for the ${clock(f.start, fromTz)} departure` });
+      // From out of bed to the departure: the mirror of the commute and preparation after landing.
+      events.push({ start: fromGround.window.end, end: f.start, kind: 'wakeup', tz: fromTz, place: from,
+        title: 'Prepare & commute',
+        detail: `prepare ${fmtDur(prepareMin)} (shower, dress, pack) · commute & report ${fmtDur((fromGround.ground.departAirport ?? fromGround.ground.airport).fromBedMin)}${lounge ? ' · lounge nap before sign-on' : ''} · ${clock(f.start, fromTz)} departure` });
     }
     events.push({ start: f.start, end: f.start, kind: 'depart', tz: fromTz, place: from,
       title: `${f.label ? `${f.label} · ` : ''}${from} → ${to}`,
@@ -900,8 +944,10 @@ export function tripEvents(
     if (toGround?.window) {
       const rest = rests.get(toGround.ground.id);
       if (!rest?.turn) {
-        events.push({ start: toGround.window.start, end: toGround.window.start, kind: 'inbed', tz: toTz, place: to,
-          title: 'In bed from', detail: `after commute, shower and preparation` });
+        // The sleep that follows already says when to be in bed: show the time it takes to get there.
+        events.push({ start: f.end, end: Math.max(f.end, toGround.window.start), kind: 'inbed', tz: toTz, place: to,
+          title: 'Commute & wind down',
+          detail: `commute ${fmtDur(toGround.ground.airport.toBedMin)} (deplane, to the hotel) · wind down ${fmtDur((toGround.window.start - f.end) / MIN - toGround.ground.airport.toBedMin)} (shower, get ready for bed)` });
       }
     }
     const rest = toGround && rests.get(toGround.ground.id);

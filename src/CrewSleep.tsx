@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
-import { Box, Flex, Heading, Text, VStack, HStack, Input, Button, Dialog, Portal, CloseButton } from '@chakra-ui/react';
+import { Box, Flex, Heading, Text, VStack, HStack, Input, Button, Dialog, Popover, Portal, CloseButton } from '@chakra-ui/react';
 import {
-  Save, Trash2, FolderOpen, Plus, Moon, Sun, Coffee, Plane, BedDouble, AlarmClock, Clock,
+  Save, Trash2, FolderOpen, Plus, Moon, Sun, Coffee, Plane, BedDouble, AlarmClock,
   ChevronDown, ChevronRight, Glasses, Sparkles, MapPin, X, Download, Upload, Settings,
-  PlaneTakeoff, PlaneLanding, ShieldCheck, ShieldAlert, Pencil, Armchair, Pill, CalendarPlus,
+  PlaneTakeoff, PlaneLanding, ShieldCheck, ShieldAlert, Pencil, Armchair, Pill, CalendarPlus, Info, Bus,
 } from 'lucide-react';
 import VegaPlot from './components/VegaPlot';
 import InstallApp from './components/InstallApp';
@@ -13,13 +13,13 @@ import { CALENDAR_GROUPS, buildIcs, openIcs, readCalendarPrefs, writeCalendarPre
 import { useColorModeValue } from './components/color-mode';
 import {
   Airport, Route, RestBreak, Flight, SleepEntry, Profile, Iv, Night, ParsedFlight, ParsedSleep, Ground,
-  PlanItem, EventKind, PlanEvent, Trip,
+  PlanItem, PlanKind, EventKind, PlanEvent, Trip,
   MIN, HOUR, DAY, SLEEP_KINDS, DEFAULT_NAP_OPTIONS, KNOWN_AIRPORTS, ALL_TZ, TRIP_BEFORE, TRIP_AFTER,
   uid, baseCodes, validTz, wallParts, wallToUtc, utcToWall, clock, dayLabel, addDays, hm, intersect, overlapAll,
   overlap, fmtH, fmtShift, parseDur, fmtDur, nightsIn, driftHours, eveningOf, tzOffsetMin, coreOf,
   newAirport, networkAirports, networkRoutes, mergeNetwork, normalizeProfile, routeFor, defaultBreaks,
   readProfiles, writeProfiles, readDraft, writeDraft,
-  parseRotation, planFlight, planGrounds, restChecks, tripEvents, expectedSleep, exampleProfile,
+  parseRotation, planFlight, planGrounds, applyPlanEdit, nearestWall, restChecks, tripEvents, expectedSleep, exampleProfile,
 } from './crewSleepLogic';
 
 
@@ -37,11 +37,33 @@ const EVENT_META: Record<EventKind, { label: string; icon: React.ReactNode }> = 
   dim: { label: 'Dim lights, sunglasses outside', icon: <Glasses size={16} /> },
   caffeine: { label: 'No more caffeine', icon: <Coffee size={16} /> },
   melatonin: { label: 'Melatonin', icon: <Pill size={16} /> },
-  wakeup: { label: 'Start getting ready', icon: <Clock size={16} /> },
+  wakeup: { label: 'Prepare & commute', icon: <Bus size={16} /> },
   depart: { label: 'Departure', icon: <PlaneTakeoff size={16} /> },
   arrive: { label: 'Arrival', icon: <PlaneLanding size={16} /> },
-  inbed: { label: 'In bed from', icon: <BedDouble size={16} /> },
+  inbed: { label: 'Commute & wind down', icon: <Bus size={16} /> },
   rest: { label: 'Rest', icon: <ShieldCheck size={16} /> },
+};
+
+/** Tips in the plan that can be switched off one by one. */
+const TIP_OPTIONS: { kind: EventKind; label: string }[] = [
+  { kind: 'light', label: 'Bright light' },
+  { kind: 'dim', label: 'Dim lights' },
+  { kind: 'caffeine', label: 'Caffeine cut-off' },
+  { kind: 'melatonin', label: 'Melatonin' },
+];
+
+// The tips switched off, kept on this device (not in the profile or backups); losing it is harmless.
+const LS_HIDDEN_TIPS = 'crew-sleep:hidden-tips';
+
+function readHiddenTips(): Set<EventKind> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LS_HIDDEN_TIPS) || '[]');
+    return new Set(Array.isArray(saved) ? saved.filter((k: unknown) => TIP_OPTIONS.some(o => o.kind === k)) : []);
+  } catch { return new Set(); }
+}
+
+const PLAN_KIND_SET: Record<PlanKind, true> = {
+  sleep: true, anchor: true, nap: true, inflight: true, strategic: true, light: true, dim: true, caffeine: true, melatonin: true,
 };
 
 const isSleepKind = (k: EventKind) => (SLEEP_KINDS as EventKind[]).includes(k);
@@ -95,6 +117,21 @@ const TzInput: React.FC<{ value: string; onChange: (v: string) => void; size?: '
 );
 
 /** Duration field accepting "90", "1h30", "1:30"; commits on blur / Enter. */
+/** A setting changed with − / + buttons around its value: thumb-friendly in the edit pop-up. */
+const Stepper: React.FC<{ label: string; sub?: string; value: string; step: number; onStep: (delta: number) => void }> = ({ label, sub, value, step, onStep }) => (
+  <Flex align="center" justify="space-between" gap={2}>
+    <Box>
+      <Text fontSize="sm" fontWeight="bold">{label}</Text>
+      {sub && <Text fontSize="xs" color="var(--muted-text)">{sub}</Text>}
+    </Box>
+    <HStack gap={1}>
+      <Button size="sm" variant="outline" onClick={() => onStep(-step)}>−{step}</Button>
+      <Text fontSize="sm" fontFamily="mono" fontWeight="bold" minW="56px" textAlign="center">{value}</Text>
+      <Button size="sm" variant="outline" onClick={() => onStep(step)}>+{step}</Button>
+    </HStack>
+  </Flex>
+);
+
 const DurInput: React.FC<{ value: number; onChange: (min: number) => void; w?: string; placeholder?: string; clearOnCommit?: boolean; size?: 'xs' | 'sm' }> = ({ value, onChange, w = '80px', placeholder, clearOnCommit, size = 'xs' }) => {
   const shown = clearOnCommit ? '' : fmtDur(value);
   const [text, setText] = useState(shown);
@@ -132,7 +169,8 @@ const Actogram: React.FC<{
   sleeps: ParsedSleep[];
   now: number;
   colors: ActoColors;
-}> = ({ homeTz, dates, nights, cores, commutes, localNights, grounds, flights, plans, sleeps, now, colors }) => {
+  focus?: Iv & { planned?: Iv }; // a step being moved: outlined, with where it was suggested
+}> = ({ homeTz, dates, nights, cores, commutes, localNights, grounds, flights, plans, sleeps, now, colors, focus }) => {
   const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [boxW, setBoxW] = useState(0);
@@ -208,6 +246,14 @@ const Actogram: React.FC<{
           <rect key={`s${s.id}`} x={xOf(s.start)} y={y + 9} width={Math.max(2, xOf(s.end) - xOf(s.start))} height={rowH - 18} rx={4}
             fill={colors.sleep}
             {...tipProps(`Slept · ${describe(s, s.tz)} · ${Math.round(s.homeOverlap * 100)}% in home night`)} />
+        ))}
+        {focus?.planned && inRow(r, [focus.planned]).map(pl => (
+          <rect key="suggested" x={xOf(pl.start)} y={y + 3} width={Math.max(3, xOf(pl.end) - xOf(pl.start))} height={rowH - 6} rx={4}
+            fill="none" stroke={colors.text} strokeOpacity={0.6} strokeWidth={1} strokeDasharray="2 2" pointerEvents="none" />
+        ))}
+        {focus && inRow(r, [focus]).map(fo => (
+          <rect key="focus" x={xOf(fo.start)} y={y + 4} width={Math.max(3, xOf(fo.end) - xOf(fo.start))} height={rowH - 8} rx={4}
+            fill="none" stroke={colors.now} strokeWidth={2.5} pointerEvents="none" />
         ))}
         {now >= r.start && now < r.end && (
           <line x1={xOf(now)} x2={xOf(now)} y1={y} y2={y + rowH} stroke={colors.now} strokeWidth={2} />
@@ -434,11 +480,11 @@ const AddTrip: React.FC<{
               onFocus={() => setSuggestOpen(true)} onBlur={() => setSuggestOpen(false)}
               onChange={e => { pickDest(e.target.value); setSuggestOpen(true); }}
               onKeyDown={e => {
-                if (e.key === 'Enter' && !d && suggestions[0]) { pickDest(`${suggestions[0].a.code} ${suggestions[0].a.city || ''}`.trim()); setSuggestOpen(false); }
+                if (e.key === 'Enter' && suggestions[0]) { pickDest(`${suggestions[0].a.code} ${suggestions[0].a.city || ''}`.trim()); setSuggestOpen(false); }
                 if (e.key === 'Escape') setSuggestOpen(false);
               }} />
           </Labeled>
-          {suggestOpen && !d && suggestions.length > 0 && (
+          {suggestOpen && suggestions.length > 0 && (
             <Box position="absolute" left={0} right={0} top="100%" mt={1} zIndex={10} maxH="280px" overflowY="auto"
               bg="var(--card-bg-raised)" border="1px solid" borderColor="var(--border-color)" borderRadius="md" boxShadow="md">
               {suggestions.map(({ a, routed }) => (
@@ -527,7 +573,6 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
   const days = Number(searchParams.get('days')) || 14;
   const configOpen = searchParams.get('config') === '1';
   const adding = searchParams.get('add') === '1';
-  const showTips = searchParams.get('tips') !== '0';
   const editTrip = searchParams.get('edit') === '1';
   const showPast = searchParams.get('past') === '1';
   const showLog = searchParams.get('log') === '1';
@@ -543,6 +588,15 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
   const [calOpen, setCalOpen] = useState(false);
   const [calGroups, setCalGroups] = useState<Set<string>>(() => new Set(readCalendarPrefs().groups));
   const [calAlarm, setCalAlarm] = useState<number | null>(() => readCalendarPrefs().alarmMin);
+  const [hiddenTips, setHiddenTips] = useState<Set<EventKind>>(readHiddenTips);
+  useEffect(() => {
+    try { localStorage.setItem(LS_HIDDEN_TIPS, JSON.stringify(Array.from(hiddenTips))); } catch { /* private mode: not remembered */ }
+  }, [hiddenTips]);
+  const toggleTip = (kind: EventKind, show: boolean) => setHiddenTips(prev => {
+    const next = new Set(prev);
+    if (show) next.delete(kind); else next.add(kind);
+    return next;
+  });
   useEffect(() => writeCalendarPrefs({ groups: Array.from(calGroups), alarmMin: calAlarm }), [calGroups, calAlarm]);
   const dirty = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -675,13 +729,19 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
   const { flights, grounds, trips, gaps, tzOf, apOf } = rotation;
   const cityOf = useCallback((code: string) => apOf(code)?.city || '', [apOf]);
 
-  const flightPlans = useMemo(() => flights.map(f => planFlight(f, p, homeTz, options)),
+  const suggestedFlightPlans = useMemo(() => flights.map(f => planFlight(f, p, homeTz, options)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [flights, homeTz, options, p.bedtime, p.wake, p.bunkSettleMin, p.maxBunkRestMin, p.serviceAfterTakeoffMin, p.serviceBeforeLandingMin]);
-  const inflight = useMemo(() => flightPlans.flatMap(fp => (fp.item ? [fp.item] : [])), [flightPlans]);
-  const groundPlans = useMemo(() => planGrounds(grounds, p, homeTz, options, inflight),
+  const suggestedInflight = useMemo(() => suggestedFlightPlans.flatMap(fp => (fp.item ? [fp.item] : [])), [suggestedFlightPlans]);
+  const suggestedGroundPlans = useMemo(() => planGrounds(grounds, p, homeTz, options, suggestedInflight),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [grounds, inflight, homeTz, options, p.bedtime, p.wake, p.targetHours, p.sleepBankMin, p.strategicNap, p.strategicNapMin, p.reportMin, p.melatonin, p.melatoninLeadMin]);
+    [grounds, suggestedInflight, homeTz, options, p.bedtime, p.wake, p.targetHours, p.sleepBankMin, p.strategicNap, p.strategicNapMin, p.reportMin, p.melatonin, p.melatoninLeadMin, p.windDownMin, p.prepareMin]);
+  // The times the user moved replace the suggested ones everywhere from here on.
+  const flightPlans = useMemo(() => suggestedFlightPlans.map(fp => (fp.item ? { ...fp, item: applyPlanEdit(fp.item, p.planEdits) } : fp)),
+    [suggestedFlightPlans, p.planEdits]);
+  const inflight = useMemo(() => flightPlans.flatMap(fp => (fp.item ? [fp.item] : [])), [flightPlans]);
+  const groundPlans = useMemo(() => suggestedGroundPlans.map(gp => ({ ...gp, items: gp.items.map(i => applyPlanEdit(i, p.planEdits)) })),
+    [suggestedGroundPlans, p.planEdits]);
   const rests = useMemo(() => restChecks(grounds, p),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [grounds, p.reportMin, p.debriefMin, p.restHomeMin, p.restAwayMin, p.restAtLeastDuty]);
@@ -725,8 +785,8 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
   ), [trips, now]);
   const trip: Trip | undefined = trips.find(t => t.id === searchParams.get('trip')) ?? defaultTrip;
 
-  const events = useMemo(() => (trip ? tripEvents(trip, groundPlans, flightPlans, rests, homeTz, cityOf) : []),
-    [trip, groundPlans, flightPlans, rests, homeTz, cityOf]);
+  const events = useMemo(() => (trip ? tripEvents(trip, groundPlans, flightPlans, rests, homeTz, cityOf, p.prepareMin) : []),
+    [trip, groundPlans, flightPlans, rests, homeTz, cityOf, p.prepareMin]);
   const impact = useMemo(() => (trip ? expectedSleep(trip, planSleeps, homeTz, p.targetHours) : []),
     [trip, planSleeps, homeTz, p.targetHours]);
 
@@ -865,6 +925,26 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
 
   // ---- editing -----------------------------------------------------------
 
+  const [editing, setEditing] = useState<string | null>(null);
+  const [showLegend, setShowLegend] = useState(false);
+  // Prepare & commute ends at the departure: its start moves when edited, its end does not.
+  const eventKey = (e: PlanEvent) => (e.kind === 'wakeup' ? `${e.kind}@${e.end}` : `${e.kind}@${(e.planned ?? e).start}`);
+  const isPlanKind = (k: EventKind): k is PlanKind => k in PLAN_KIND_SET;
+  /** Move a suggested item; edits for plans over a month old are dropped on the way. */
+  const movePlan = (e: PlanEvent, start: number, end: number) => {
+    if (!isPlanKind(e.kind) || Number.isNaN(start) || Number.isNaN(end)) return;
+    const kind = e.kind;
+    const planned = e.planned ?? { start: e.start, end: e.end };
+    const keep = (x: { kind: PlanKind; planned: number; end: number }) => !(x.kind === kind && x.planned === planned.start) && x.end > now - 30 * DAY;
+    update(prev => ({
+      ...prev,
+      planEdits: [
+        ...prev.planEdits.filter(keep),
+        ...(start === planned.start && end === planned.end ? [] : [{ kind, planned: planned.start, start, end }]),
+      ],
+    }));
+  };
+
   const ensureAirport = (code: string) => update(prev => (
     !code || prev.airports.some(a => a.code.toUpperCase() === code.toUpperCase())
       ? prev
@@ -872,6 +952,27 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
   ));
   const editAirport = (code: string, patch: Partial<Airport>) =>
     update(prev => ({ ...prev, airports: prev.airports.map(a => (a.code === code ? { ...a, ...patch } : a)) }));
+  /**
+   * The airport as the plan sees it: saved in the profile, or the defaults the plan uses until it is.
+   * Commutes changed from the plan are saved on the airport (added to the profile if needed), so
+   * every trip through it uses them, and Configuration shows the same values.
+   */
+  const airportOf = (code: string) => p.airports.find(x => x.code.toUpperCase() === code.toUpperCase()) ?? newAirport(code.toUpperCase(), tzOf(code));
+  const saveAirport = (code: string, patch: Partial<Airport>) => update(prev => {
+    const key = code.toUpperCase();
+    const known = prev.airports.some(a => a.code.toUpperCase() === key);
+    return {
+      ...prev,
+      airports: known
+        ? prev.airports.map(a => (a.code.toUpperCase() === key ? { ...a, ...patch } : a))
+        : [...prev.airports, { ...newAirport(key, tzOf(key)), ...patch }],
+    };
+  });
+  const clampCommute = (min: number) => Math.max(0, Math.min(12 * 60, Math.round(min)));
+  /** Arrival: block-in -> at the hotel (or home). */
+  const setToBed = (code: string, min: number) => saveAirport(code, { toBedMin: clampCommute(min) });
+  /** Departure: leaving the hotel (or home) -> departure. */
+  const setFromBed = (code: string, min: number) => saveAirport(code, { fromBedMin: clampCommute(min) });
   const removeAirport = (code: string) => update(prev => ({ ...prev, airports: prev.airports.filter(a => a.code !== code) }));
 
   /** Fill the arrival from the route's estimated block time, when the route is known. */
@@ -1011,8 +1112,13 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
   const calPicked = calUpcoming.filter(e => calKinds.includes(e.kind));
   const exportCalendar = () => {
     if (!trip || !calPicked.length) return;
+    // Sleeps say where they happen, so home nights and layover sleeps read apart in the calendar.
+    const calTitle = (e: PlanEvent) => {
+      if (!isSleepKind(e.kind) || e.kind === 'inflight' || e.kind === 'strategic') return eventTitle(e);
+      return bases.includes(e.place) ? `${eventTitle(e)} · home` : `${eventTitle(e)} · ${cityOf(e.place) || e.place} (away)`;
+    };
     const ics = buildIcs(calPicked.map(e => ({
-      kind: e.kind, start: e.start, end: e.end, title: eventTitle(e),
+      kind: e.kind, start: e.start, end: e.end, title: calTitle(e),
       detail: [eventDetail(e), coreLine(e)].filter(Boolean).join(' · '),
       place: e.place === 'in flight' ? 'In flight' : [e.place, cityOf(e.place)].filter(Boolean).join(' '),
     })), calAlarm, `Kkuljam ${tripTitle(trip)}`);
@@ -1020,7 +1126,19 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
     setCalOpen(false);
   };
 
-  const tipFiltered = events.filter(e => showTips || !e.tip);
+  // The legal rest is still checked, but only shown in the plan when it is too short.
+  const tipFiltered = events.filter(e => !hiddenTips.has(e.kind) && (e.kind !== 'rest' || e.warn));
+  const editEvent = editing ? events.find(e => eventKey(e) === editing) : undefined;
+  // The chart rows (home days, noon to noon) the step and its suggested time touch.
+  const editDates = (() => {
+    if (!editEvent) return [];
+    const ivs = [editEvent, ...(editEvent.planned ? [editEvent.planned] : [])];
+    const first = eveningOf(Math.min(...ivs.map(i => i.start)), homeTz);
+    const last = eveningOf(Math.max(...ivs.map(i => i.end)), homeTz);
+    const out: string[] = [];
+    for (let d = first; d <= last; d = addDays(d, 1)) out.push(d);
+    return out;
+  })();
   // Keep the plan to what matters now: the last step that happened, then what is on and ahead.
   // A trip that is entirely over (or not started) shows everything.
   const firstLive = tipFiltered.findIndex(e => e.end >= now || e.start >= now);
@@ -1251,13 +1369,16 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
           {/* Step by step */}
           <Flex justify="space-between" align="center" mt={5} mb={2}>
             <Text fontSize="sm" fontWeight="bold">Your plan, step by step</Text>
-            <HStack gap={3}>
-              <HStack as="label" gap={2} fontSize="xs" cursor="pointer">
-                <input type="checkbox" checked={showTips} onChange={e => setParams({ tips: e.target.checked ? null : '0' })} />
-                <span>Light & caffeine tips</span>
+            <Button size="xs" variant="outline" onClick={() => setCalOpen(true)}><CalendarPlus size={12} /> Calendar</Button>
+          </Flex>
+          <Flex gap={3} wrap="wrap" align="center" fontSize="xs" mb={2}>
+            <Text color="var(--muted-text)">Tips:</Text>
+            {TIP_OPTIONS.filter(o => o.kind !== 'melatonin' || p.melatonin).map(o => (
+              <HStack key={o.kind} as="label" gap={1.5} cursor="pointer">
+                <input type="checkbox" checked={!hiddenTips.has(o.kind)} onChange={e => toggleTip(o.kind, e.target.checked)} />
+                <span>{o.label}</span>
               </HStack>
-              <Button size="xs" variant="outline" onClick={() => setCalOpen(true)}><CalendarPlus size={12} /> Calendar</Button>
-            </HStack>
+            ))}
           </Flex>
           {hiddenCount > 0 && (
             <Button size="xs" variant="ghost" mb={2} onClick={() => setParams({ past: showPast ? null : '1' })}>
@@ -1275,7 +1396,7 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
                     const sleepy = isSleepKind(e.kind);
                     const past = e.end < now && e.start < now;
                     return (
-                      <React.Fragment key={`${e.kind}${e.start}`}>
+                      <React.Fragment key={eventKey(e)}>
                         {idx === nowIndex && nowIndex > 0 && (
                           <HStack gap={2} py={1}>
                             <Box flex="1" h="2px" bg={colors.now} />
@@ -1286,9 +1407,14 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
                         <HStack gap={3} py={1.5} px={2} borderLeft="3px solid" align="flex-start"
                           borderColor={e.warn ? colors.warn : sleepy && overlapAll(e, cores) >= 90 * MIN ? colors.anchor : sleepy ? colors.sleep : 'transparent'}
                           opacity={past ? 0.55 : e.tip ? 0.85 : 1}>
-                          <Box w="96px" flexShrink={0}>
-                            <Text fontSize="sm" fontWeight="bold" fontFamily="mono">
-                              {clock(e.start, e.tz)}{e.end > e.start ? `–${clock(e.end, e.tz)}` : ''}
+                          <Box w="108px" flexShrink={0}>
+                            <Text fontSize="sm" fontWeight="bold" fontFamily="mono"
+                              {...(isPlanKind(e.kind) || e.kind === 'inbed' || e.kind === 'wakeup' ? {
+                                as: 'button' as const, textAlign: 'left' as const, cursor: 'pointer', textDecoration: 'underline dotted',
+                                textUnderlineOffset: '3px',
+                                title: e.planned ? 'Your time (changed) · tap to change' : 'Change this time', onClick: () => setEditing(editing === eventKey(e) ? null : eventKey(e)),
+                              } : {})}>
+                              {clock(e.start, e.tz)}{e.end > e.start ? `–${clock(e.end, e.tz)}` : ''}{e.planned && '*'}
                             </Text>
                             {e.tz !== homeTz && <Text fontSize="2xs" color="var(--muted-text)">home {clock(e.start, homeTz)}</Text>}
                           </Box>
@@ -1299,9 +1425,27 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
                             <Text fontSize="sm" fontWeight={sleepy || e.kind === 'depart' ? 'bold' : 'normal'} color={e.warn ? colors.warn : undefined}>
                               {eventTitle(e)}
                               {e.end > e.start && <Text as="span" fontWeight="normal" color="var(--muted-text)"> · {fmtDur((e.end - e.start) / MIN)}</Text>}
+                              {!e.warn && (eventDetail(e) || coreLine(e)) && (
+                                <Popover.Root positioning={{ placement: 'bottom-end' }}>
+                                  <Popover.Trigger asChild>
+                                    <Box as="button" aria-label="Why" display="inline-flex" verticalAlign="middle" ml={1.5} p="2px"
+                                      color="var(--muted-text)" cursor="pointer"><Info size={14} /></Box>
+                                  </Popover.Trigger>
+                                  <Portal>
+                                    <Popover.Positioner>
+                                      <Popover.Content maxW="280px">
+                                        <Popover.Body p={3} fontSize="xs">
+                                          {eventDetail(e) && <Text>{eventDetail(e)}</Text>}
+                                          {coreLine(e) && <Text color={colors.anchor} mt={eventDetail(e) ? 1 : 0}>{coreLine(e)}</Text>}
+                                        </Popover.Body>
+                                      </Popover.Content>
+                                    </Popover.Positioner>
+                                  </Portal>
+                                </Popover.Root>
+                              )}
                             </Text>
-                            {eventDetail(e) && <Text fontSize="xs" color="var(--muted-text)">{eventDetail(e)}</Text>}
-                            {coreLine(e) && <Text fontSize="xs" color={colors.anchor}>{coreLine(e)}</Text>}
+                            {/* A warning stays in sight: it is not an explanation. */}
+                            {e.warn && eventDetail(e) && <Text fontSize="xs" color="var(--muted-text)">{eventDetail(e)}</Text>}
                           </Box>
                         </HStack>
                       </React.Fragment>
@@ -1401,6 +1545,123 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
       </>)}
 
       {/* Export the trip plan to the phone calendar */}
+      <Dialog.Root open={!!editEvent} onOpenChange={(d: { open: boolean }) => { if (!d.open) setEditing(null); }} placement="center" scrollBehavior="inside">
+        <Portal>
+          <Dialog.Backdrop />
+          <Dialog.Positioner>
+            <Dialog.Content maxW="560px" width="95vw" maxH="90vh">
+              {editEvent && (() => {
+                const e = editEvent;
+                const span = e.end > e.start;
+                const nudge = (m: number) => movePlan(e, e.start + m * MIN, e.end + m * MIN);
+                return (<>
+                  <Dialog.Header>
+                    <Dialog.Title><HStack gap={2}>{EVENT_META[e.kind].icon}<span>{eventTitle(e)}</span></HStack></Dialog.Title>
+                  </Dialog.Header>
+                  <Dialog.CloseTrigger asChild>
+                    <CloseButton size="sm" />
+                  </Dialog.CloseTrigger>
+                  <Dialog.Body>
+                    <VStack align="stretch" gap={4}>
+                      <Text fontSize="sm" color="var(--muted-text)">
+                        {dayLabel(e.start, e.tz)} · {e.place === 'in flight' ? 'in flight, home time' : `local time in ${cityOf(e.place) || e.place}`}
+                      </Text>
+                      <Box>
+                        <Actogram homeTz={homeTz} dates={editDates} nights={allNights} localNights={localNights} grounds={grounds}
+                          flights={flights} plans={planSleeps} cores={cores} commutes={commutes} sleeps={sleeps} now={now} colors={colors}
+                          focus={{ start: e.start, end: Math.max(e.end, e.start + 10 * MIN), planned: e.planned }} />
+                        <Button size="xs" variant="ghost" mt={1} px={1} onClick={() => setShowLegend(v => !v)}>
+                          {showLegend ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Legend
+                        </Button>
+                        {showLegend && (<>
+                          <HStack gap={3} mb={1} fontSize="xs" color="var(--muted-text)">
+                            <HStack gap={1}><Box w="14px" h="8px" borderRadius="2px" border="2px solid" borderColor={colors.now} /> <span>This step</span></HStack>
+                            {e.planned && <HStack gap={1}><Box w="14px" h="8px" borderRadius="2px" border="1px dashed" borderColor={colors.text} /> <span>Suggested</span></HStack>}
+                          </HStack>
+                          <ActoLegend colors={colors} />
+                        </>)}
+                      </Box>
+                      {e.kind === 'wakeup' ? (() => {
+                        const code = e.place;
+                        const commute = airportOf(code).fromBedMin;
+                        return (<>
+                          <VStack align="stretch" gap={3}>
+                            <Stepper label="Prepare" sub="shower, dress, pack · the same everywhere"
+                              value={fmtDur(p.prepareMin)} step={15} onStep={d => set('prepareMin', Math.max(0, Math.min(4 * 60, p.prepareMin + d)))} />
+                            <Stepper label="Commute" sub={`to the airport and report · saved for ${cityOf(code) || code} (${code})`}
+                              value={fmtDur(commute)} step={15} onStep={d => setFromBed(code, commute + d)} />
+                          </VStack>
+                          <Text fontSize="xs" color="var(--muted-text)">
+                            Out of bed {clock(e.start, e.tz)} → departure {clock(e.end, e.tz)} · {fmtDur((e.end - e.start) / MIN)}.
+                            The sleep before it moves. Both are also in Configuration.
+                          </Text>
+                        </>);
+                      })() : e.kind === 'inbed' ? (() => {
+                        const code = e.place;
+                        const commute = airportOf(code).toBedMin;
+                        return (<>
+                          <VStack align="stretch" gap={3}>
+                            <Stepper label="Commute" sub={`deplane, to the hotel · saved for ${cityOf(code) || code} (${code})`}
+                              value={fmtDur(commute)} step={15} onStep={d => setToBed(code, commute + d)} />
+                            <Stepper label="Wind down" sub="shower, get ready for bed · the same everywhere"
+                              value={fmtDur(p.windDownMin)} step={15} onStep={d => set('windDownMin', Math.max(0, Math.min(4 * 60, p.windDownMin + d)))} />
+                          </VStack>
+                          <Text fontSize="xs" color="var(--muted-text)">
+                            Block-in {clock(e.start, e.tz)} → in bed {clock(e.end, e.tz)} · {fmtDur((e.end - e.start) / MIN)}.
+                            The sleep after it moves. Both are also in Configuration.
+                          </Text>
+                        </>);
+                      })() : (<>
+                      <Flex gap={3} wrap="wrap" align="flex-end" fontSize="xs">
+                        <Box>
+                          <Text color="var(--muted-text)">{span ? 'Start' : 'Time'}</Text>
+                          <Input type="time" size="sm" w="120px" value={clock(e.start, e.tz)}
+                            onChange={ev => {
+                              if (!ev.target.value) return;
+                              const start = nearestWall(ev.target.value, e.tz, e.start);
+                              movePlan(e, start, start + (e.end - e.start)); // keeps the length
+                            }} />
+                        </Box>
+                        {span && (
+                          <Box>
+                            <Text color="var(--muted-text)">End</Text>
+                            <Input type="time" size="sm" w="120px" value={clock(e.end, e.tz)}
+                              onChange={ev => {
+                                if (!ev.target.value) return;
+                                let end = nearestWall(ev.target.value, e.tz, e.end);
+                                if (end <= e.start) end += DAY;
+                                if (end - e.start >= DAY) end -= DAY;
+                                if (end > e.start) movePlan(e, e.start, end);
+                              }} />
+                          </Box>
+                        )}
+                      </Flex>
+                      <VStack align="stretch" gap={3}>
+                        <Stepper label="Move" sub={span ? 'earlier or later, same length' : 'earlier or later'}
+                          value={clock(e.start, e.tz)} step={30} onStep={nudge} />
+                        {span && (
+                          <Stepper label="Length" sub="same start"
+                            value={fmtDur((e.end - e.start) / MIN)} step={15}
+                            onStep={d => { if (e.end + d * MIN > e.start) movePlan(e, e.start, e.end + d * MIN); }} />
+                        )}
+                      </VStack>
+                      {coreLine(e) && <Text fontSize="xs" color={colors.anchor}>{coreLine(e)}</Text>}
+                      </>)}
+                    </VStack>
+                  </Dialog.Body>
+                  <Dialog.Footer>
+                    {e.planned && (
+                      <Button size="sm" variant="outline" onClick={() => movePlan(e, e.planned!.start, e.planned!.end)}>Back to suggested</Button>
+                    )}
+                    <Button size="sm" onClick={() => setEditing(null)}>Done</Button>
+                  </Dialog.Footer>
+                </>);
+              })()}
+            </Dialog.Content>
+          </Dialog.Positioner>
+        </Portal>
+      </Dialog.Root>
+
       <Dialog.Root open={calOpen} onOpenChange={(d: { open: boolean }) => setCalOpen(d.open)} placement="center" scrollBehavior="inside">
         <Portal>
           <Dialog.Backdrop />
@@ -1543,6 +1804,8 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
                         <span>Strategic nap in the crew lounge before a night flight or long duty</span>
                       </HStack>
                       <Labeled label="Strategic nap"><DurInput value={p.strategicNapMin} onChange={m => set('strategicNapMin', m)} /></Labeled>
+                      <Labeled label="Prepare before the commute"><DurInput value={p.prepareMin} onChange={m => set('prepareMin', m)} /></Labeled>
+                      <Labeled label="Wind down after the commute"><DurInput value={p.windDownMin} onChange={m => set('windDownMin', m)} /></Labeled>
                       <HStack as="label" gap={2} fontSize="xs" fontWeight="bold" cursor="pointer" pb={1}>
                         <input type="checkbox" checked={p.melatonin} onChange={e => set('melatonin', e.target.checked)} />
                         <span>Melatonin reminder</span>
@@ -1612,7 +1875,7 @@ const CrewSleep: React.FC<{ basePath?: string }> = ({ basePath = '' }) => {
                         <thead style={{ position: 'sticky', top: 0, background: 'var(--card-bg-raised)' }}>
                           <tr>
                             <th style={thStyle}>Code</th><th style={thStyle}>City</th><th style={thStyle}>Time zone</th>
-                            <th style={thStyle}>Block-in → in bed</th><th style={thStyle}>Out of bed → departure</th><th style={thStyle} />
+                            <th style={thStyle}>Block-in → hotel (commute)</th><th style={thStyle}>Hotel → departure (commute & report)</th><th style={thStyle} />
                           </tr>
                         </thead>
                         <tbody>

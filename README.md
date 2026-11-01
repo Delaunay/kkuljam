@@ -14,6 +14,14 @@ A trip's plan can be added to the phone calendar (Apple Calendar or any app that
 opens `.ics` files) with reminders: **Calendar** above "Your plan, step by step"
 lets you pick sleep, naps, bunk rest, the coffee cut-off, and so on.
 
+Any suggested time in the plan (sleep, naps, bunk rest, tips) can be tapped and
+moved when it does not fit the day; the plan, chart and calendar then use your
+time, and **Back to suggested** undoes it. Tips can also be switched off one by
+one above the plan.
+
+The live site counts page views with Google Analytics (which screen is open,
+not what you enter); it is off with `npm run dev`.
+
 ## Develop
 
 ```sh

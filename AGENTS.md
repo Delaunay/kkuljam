@@ -50,6 +50,8 @@ they are stored can silently wipe everyone's data, so:
   stays `crew-sleep` even though the app is now called Kkuljam.
 - `crew-sleep:calendar` only remembers the calendar export choices; losing it
   is harmless.
+- `crew-sleep:hidden-tips` only remembers which tips are switched off in the
+  plan; losing it is harmless.
 - Do not rename keys or change the shape of a profile without code that reads
   the old form and converts it (`normalizeProfile` fills in missing fields:
   add new fields there with a default).
@@ -59,8 +61,11 @@ they are stored can silently wipe everyone's data, so:
 
 ## Keep it an offline web app
 
-- There is no server, no account and no analytics. Do not add any: no
-  backend, no external API calls carrying user data, no trackers.
+- There is no server and no account. Do not add any: no backend, no
+  external API calls carrying user data.
+- Google Analytics (`src/analytics.tsx`, id `VITE_GA_ID`) counts page views
+  only: it reports the route, never what the user typed or stored. Keep it
+  that way. It is off with `npm run dev`; non-`main` builds send debug traffic.
 - Everything the app needs must keep working offline after the first visit.
   The app manifest and offline cache are in `vite.config.ts`; `public/_headers`
   makes new deploys reach installed phones.
